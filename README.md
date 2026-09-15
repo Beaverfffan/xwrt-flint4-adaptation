@@ -3,6 +3,12 @@
 把 [JiaY-shi](https://github.com/JiaY-shi/openwrt) 的 **flint4**（GL.iNet GL-BE14000 / YT9224 交换机）支持
 适配到 **x-wrt** 的补丁与说明。
 
+> **配套仓库（可直接编译的完整源码分支）**：
+> <https://github.com/Beaverfffan/x-wrt-flint4>
+> —— 基于 x-wrt tag `26.04_b202609121905` + flint4 支持 + 本仓库的修复补丁，
+> `main` 分支 clone 下来就能编；分支迁移方法见其根目录 `FLINT4-XWRT.md`。
+> **本仓库只放适配层（原理、补丁、工具、验证），不放整棵源码树。**
+
 x-wrt 自带 `natflow` 硬件加速栈，它替换了 MediaTek 以太网驱动里的两个 PPE 源文件。
 flint4 补丁集中所有改这两个文件的补丁在 x-wrt 上会**静默失效**（编译进去的是另一份拷贝），
 表现为**硬件转发完全不可用**：PPE 表项正常绑定、端口位也对，但帧在交换机上被丢弃到几乎断流。
