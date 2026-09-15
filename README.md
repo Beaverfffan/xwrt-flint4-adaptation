@@ -1,3 +1,12 @@
+> **分支说明**
+> - **`main`（仓库默认分支）= 可直接编译的完整源码树**：
+>   x-wrt tag `26.04_b202609150335` + GL.iNet GL-BE14000 机型适配与交换机/PHY 补丁。
+>   入口文档在源码树根目录的 `FLINT4-BE14000.md`。
+> - **`docs`（本分支）= 适配原理、补丁逐行说明、检测工具与验证报告**，不含源码。
+>
+> 早期那个独立的完整源码仓库 `Beaverfffan/x-wrt-flint4`（基线是较旧的 tag）已不再维护，
+> 请以本仓库 `main` 为准。
+
 # xwrt-flint4-adaptation
 
 把 [JiaY-shi](https://github.com/JiaY-shi/openwrt) 的 **flint4**（GL.iNet GL-BE14000 / YT9224 交换机）支持
