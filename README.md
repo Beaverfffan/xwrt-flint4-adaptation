@@ -1,10 +1,10 @@
-> ## 📌 这是 `Beaverfffan/x-wrt-flint4` 的 `main` 分支
+> ## 📌 这是 `Beaverfffan/xwrt-flint4-adaptation` 的 `main` 分支
 >
-> **x-wrt tag `26.04_b202609121905` + flint4（GL.iNet GL-BE14000 / YT9224）支持 + 有线硬件转发修复。**
+> **x-wrt tag `26.04_b202609121905` + flint4（GL.iNet GL-BE14000 / GL-BE10000 / YT9224 交换机）支持 + 有线硬件转发修复。**
 > `main` 分支 clone 下来即可编译，真机验证通过。
 >
 > - **本分支说明 / 编译方法 / 迁移到其它 x-wrt 分支或 tag 的完整步骤** → [`FLINT4-XWRT.md`](FLINT4-XWRT.md)
-> - 适配原理、补丁逐行说明、死代码检测器 → <https://github.com/Beaverfffan/xwrt-flint4-adaptation>
+> - 适配原理、补丁逐行说明、死代码检测器、真机验证数据 → 本仓库 **`docs` 分支**
 > - 上游：<https://github.com/x-wrt/x-wrt>（`master` 分支为纯上游，只读跟踪）
 >
 > 下面是 x-wrt / OpenWrt 的原始 README。
