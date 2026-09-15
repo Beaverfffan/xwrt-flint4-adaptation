@@ -1,0 +1,15 @@
+# 不在 x-wrt feeds 里、需要自行 clone 到 package/ 的本地包
+#
+# 格式： <目标目录名>  <git 地址>  <commit>
+#
+# x-wrt 的 feeds 全部来自 github.com/x-wrt/{packages,luci,routing,telephony,video,com.x-wrt}
+# （见 feeds.conf.default），下面这几个包不在其中，但被
+# flint4/be14000-flint4.config 选中（CONFIG_PACKAGE_luci-app-passwall / adguardhome 等）。
+#
+# 由 flint4/fetch-local-packages.sh 读取本文件。
+# 目录名必须与 OpenWrt 期望的 package 目录名一致：
+#   - luci-app-passwall 放在 package/passwall-luci/  （该仓库根下就是 luci-app-passwall/）
+#   - passwall 依赖的 17 个组件包放在 package/passwall-packages/
+luci-app-adguardhome  https://github.com/kenzok78/luci-app-adguardhome.git       e72313f8bed4d6f551b041ed329edb8ba0147d48
+passwall-luci         https://github.com/Openwrt-Passwall/openwrt-passwall       2dcb54e20c7cc8daca764dbd7c964d659b30af9b
+passwall-packages     https://github.com/Openwrt-Passwall/openwrt-passwall-packages  b08887dfbd0db1710e54203ca700a697653f5b8d
