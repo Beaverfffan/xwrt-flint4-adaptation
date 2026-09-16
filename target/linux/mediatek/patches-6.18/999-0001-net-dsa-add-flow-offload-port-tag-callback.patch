@@ -1,0 +1,187 @@
+From: WorkBuddy <noreply@localhost>
+Date: Wed, 16 Sep 2026 09:20:00 +0800
+Subject: [PATCH] net: dsa: let the tagger encode the egress port for flow offload
+
+Some DSA taggers express the egress port in an 802.1Q shaped CPU tag: the
+MxL862xx stand-alone VID and the Motorcomm YT9224 four-byte port tag both put
+the port information into the TCI slot of a 0x8100 header, either directly or
+through a reserved VID.  Conduits that offload flows into hardware need that
+value, but they cannot reach the struct dsa_port of the user port and therefore
+cannot compute it themselves.
+
+Open-coded workarounds exist in the wild: the DSA core packs the MxL862xx
+stand-alone VID into the upper byte of the documented "dsa_port" field, and the
+MediaTek PPE driver compares the tag protocol against DSA_TAG_PROTO_YT922X_4B
+and calls yt922x_4b_port_tag() directly.  Both leak a tagger's private encoding
+into unrelated code, limit the port index, and need another driver change for
+every new 802.1Q shaped tagger.
+
+Give the tagger a say instead.  Add an optional flow_offload_port_tag()
+callback to struct dsa_device_ops which fills in the value for the TCI slot, and
+a new dsa_port_tag field in struct flow_offload_hw_path to carry it.  dsa_port
+keeps its plain meaning: the user port index.
+
+A callback returning 0 means the tagger is not 802.1Q shaped and the conduit has
+to use the native encoding; a negative errno means the port cannot be
+represented, in which case the path is left untouched so that the flow falls
+back to the software path.
+
+A tagger may also use the negative return for a port whose software and hardware
+encapsulations differ.  The YT9224 four-byte tagger inserts the access port PVID
+it reads from the bridge VLAN configuration ahead of the CPU port tag, which the
+PPE path cannot reproduce, so it refuses to describe VLAN-filtering ports and
+those flows stay in software.  With the callback that policy sits in the tagger
+that knows about it; a protocol comparison in the conduit cannot express it, and
+it would have to grow a new case for every tagger with the same property.
+
+Signed-off-by: WorkBuddy <noreply@localhost>
+---
+diff --git a/include/net/netfilter/nf_flow_table.h b/include/net/netfilter/nf_flow_table.h
+--- a/include/net/netfilter/nf_flow_table.h
++++ b/include/net/netfilter/nf_flow_table.h
+@@ -238,8 +238,15 @@
+ 	u16 vlan_proto;
+ 	u16 vlan_id;
+ 	u16 pppoe_sid;
+-	/* Native port or (MxL outer VID << 4) | port; 0xffff means no DSA. */
++	/* Native DSA user port index, or 0xffff when the egress device is not
++	 * a DSA user port.
++	 */
+ 	u16 dsa_port;
++	/* Value for the egress port tag's 802.1Q TCI slot, as filled in by the
++	 * tagger's flow_offload_port_tag() callback.  0 means the tagger is not
++	 * 802.1Q shaped and its native tag has to be used instead.
++	 */
++	u16 dsa_port_tag;
+ };
+ 
+ #define NF_FLOW_TIMEOUT (30 * HZ)
+diff --git a/include/net/dsa.h b/include/net/dsa.h
+--- a/include/net/dsa.h
++++ b/include/net/dsa.h
+@@ -118,6 +118,15 @@
+ 	 * its RX filter.
+ 	 */
+ 	bool promisc_on_conduit;
++	/* Fills @tag with the value a flow offload capable conduit must write
++	 * into the 802.1Q TCI slot of the egress port tag for @dp, or with 0
++	 * when the tagger's port tag is not 802.1Q shaped and the conduit has
++	 * to fall back to the tagger's native encoding.  Returns a negative
++	 * errno when @dp cannot be represented at all, in which case the flow
++	 * must not be offloaded.  Only 802.1Q shaped taggers need to provide
++	 * this.
++	 */
++	int (*flow_offload_port_tag)(const struct dsa_port *dp, u16 *tag);
+ };
+ 
+ struct dsa_lag {
+diff --git a/net/dsa/user.c b/net/dsa/user.c
+--- a/net/dsa/user.c
++++ b/net/dsa/user.c
+@@ -22,7 +22,6 @@
+ #include <net/dcbnl.h>
+ #include <linux/netpoll.h>
+ #include <linux/string.h>
+-#include <linux/dsa/8021q.h>
+ #include <net/netfilter/nf_flow_table.h>
+ 
+ #include "conduit.h"
+@@ -2607,17 +2606,28 @@
+ {
+ 	struct net_device *dev = path->dev;
+ 	struct dsa_port *dp;
++	u16 tag = 0;
++	int err;
+ 
+ 	if (!(path->flags & FLOW_OFFLOAD_PATH_ETHERNET))
+ 		return -EINVAL;
+ 
+ 	dp = dsa_user_to_port(dev);
++
++	/* Ask the tagger how it wants the egress port encoded.  On failure
++	 * leave the path untouched, so that the caller keeps the user port
++	 * and does not offload this flow.
++	 */
++	if (dp->cpu_dp->tag_ops->flow_offload_port_tag) {
++		err = dp->cpu_dp->tag_ops->flow_offload_port_tag(dp, &tag);
++		if (err)
++			return err;
++	}
++
+ 	path->dsa_port = dp->index;
++	path->dsa_port_tag = tag;
+ 	path->dev = dsa_user_to_conduit(dev);
+ 	path->flags |= FLOW_OFFLOAD_PATH_DSA;
+-	if (dp->cpu_dp->tag_ops->proto == DSA_TAG_PROTO_MXL862_8021Q) {
+-		path->dsa_port |= (dsa_tag_8021q_standalone_vid(dp) << 4);
+-	}
+ 
+ 	if (path->dev->netdev_ops->ndo_flow_offload_check)
+ 		return path->dev->netdev_ops->ndo_flow_offload_check(path);
+diff --git a/net/dsa/tag_mxl862xx_8021q.c b/net/dsa/tag_mxl862xx_8021q.c
+--- a/net/dsa/tag_mxl862xx_8021q.c
++++ b/net/dsa/tag_mxl862xx_8021q.c
+@@ -62,11 +62,24 @@
+ 	return skb;
+ }
+ 
++static int
++mxl862_8021q_flow_offload_port_tag(const struct dsa_port *dp, u16 *tag)
++{
++	/* The port is identified by a stand-alone VID, so the port tag is a
++	 * plain 802.1Q header and the conduit can write it through the VLAN
++	 * TCI slot.
++	 */
++	*tag = dsa_tag_8021q_standalone_vid(dp);
++
++	return 0;
++}
++
+ static const struct dsa_device_ops mxl862_8021q_netdev_ops = {
+ 	.name			= MXL862_8021Q_NAME,
+ 	.proto			= DSA_TAG_PROTO_MXL862_8021Q,
+ 	.xmit			= mxl862_8021q_xmit,
+ 	.rcv			= mxl862_8021q_rcv,
++	.flow_offload_port_tag	= mxl862_8021q_flow_offload_port_tag,
+ 	.needed_headroom	= VLAN_HLEN,
+ 	.promisc_on_conduit	= true,
+ };
+diff --git a/net/dsa/tag_yt922x.c b/net/dsa/tag_yt922x.c
+--- a/net/dsa/tag_yt922x.c
++++ b/net/dsa/tag_yt922x.c
+@@ -224,11 +224,35 @@
+ 	return skb;
+ }
+ 
++static int yt922x_4b_flow_offload_port_tag(const struct dsa_port *dp, u16 *tag)
++{
++	u16 ctrl;
++
++	/* The software tagger inserts the access port PVID, taken from the
++	 * bridge VLAN configuration, ahead of the CPU port tag
++	 * (yt922x_vlan_xmit()).  The PPE path can only write the port tag, so
++	 * an offloaded flow would leave the switch without its customer tag.
++	 * Keep such ports in software.
++	 */
++	if (dsa_port_is_vlan_filtering(dp))
++		return -EOPNOTSUPP;
++
++	ctrl = yt922x_4b_port_tag(dp->index);
++
++	if (!ctrl)
++		return -EOPNOTSUPP;
++
++	*tag = ctrl;
++
++	return 0;
++}
++
+ static const struct dsa_device_ops yt922x_4b_netdev_ops = {
+ 	.name = "yt922x_4b",
+ 	.proto = DSA_TAG_PROTO_YT922X_4B,
+ 	.xmit = yt922x_4b_tag_xmit,
+ 	.rcv = yt922x_4b_tag_rcv,
++	.flow_offload_port_tag = yt922x_4b_flow_offload_port_tag,
+ 	/* Metadata S-tag, access PVID and the CPU port tag. */
+ 	.needed_headroom = 3 * VLAN_HLEN,
+ };

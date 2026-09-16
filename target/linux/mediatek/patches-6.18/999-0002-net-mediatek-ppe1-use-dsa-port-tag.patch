@@ -1,0 +1,97 @@
+From: WorkBuddy <noreply@localhost>
+Date: Wed, 16 Sep 2026 09:21:00 +0800
+Subject: [PATCH] net: ethernet: mediatek: use dsa_port_tag for the PPE egress tag
+
+Now that the DSA tagger tells the conduit what to write into the TCI slot, drop
+the open-coded knowledge here.  Three cases collapse into two:
+
+  - dsa_port_tag != 0: an 802.1Q shaped port tag, write it through the VLAN TCI
+    slot (mtk_foe_entry_set_vlan()).
+  - otherwise: the tagger's native encoding, i.e. the MediaTek private tag
+    (mtk_foe_entry_set_dsa()).
+
+This removes the DSA_TAG_PROTO_YT922X_4B comparison, the separate
+yt922x_4b_port_tag() call and the MxL862xx packing decode, and it lets the full
+port index reach dsa_port_rank[] instead of the low nibble only.
+
+Signed-off-by: WorkBuddy <noreply@localhost>
+---
+diff --git a/drivers/net/ethernet/mediatek/mtk_ppe_offload1.c b/drivers/net/ethernet/mediatek/mtk_ppe_offload1.c
+--- a/drivers/net/ethernet/mediatek/mtk_ppe_offload1.c
++++ b/drivers/net/ethernet/mediatek/mtk_ppe_offload1.c
+@@ -14,7 +14,6 @@
+ #include <net/flow_offload.h>
+ #include <net/pkt_cls.h>
+ #include <net/dsa.h>
+-#include <linux/dsa/8021q.h>
+ #include "mtk_eth_soc.h"
+ #ifdef CONFIG_NET_MEDIATEK_SOC_WED
+ #include "mtk_wed.h"
+@@ -331,18 +330,23 @@
+ #endif
+ 
+ 	if (dest->dsa_port != 0xffff) {
+-		u16 dsa_port = dest->dsa_port;
+-
+-		if (dsa_port & 0xff00)
+-			dsa_port &= 0xf;
+ 		if (pse_port == PSE_GDM1_PORT || pse_port == PSE_GDM2_PORT || pse_port == PSE_GDM3_PORT) {
+-			if (dsa_port < MTK_DSA_USER_PORT_MAX) {
++			if (dest->dsa_port < MTK_DSA_USER_PORT_MAX) {
+ 				struct mtk_mac *mac = netdev_priv(dest->dev);
+-				mtk_foe_entry_set_queue(eth, entry, mac->dsa_queue_base + mac->dsa_port_rank[dsa_port]);
+-			}
+-		}
+-		if ((dest->dsa_port & 0xff00)) {
+-			mtk_foe_entry_set_vlan(eth, entry, dest->dsa_port >> 4);
++				mtk_foe_entry_set_queue(eth, entry, mac->dsa_queue_base + mac->dsa_port_rank[dest->dsa_port]);
++			}
++		}
++		if (dest->dsa_port_tag) {
++			/* The DSA tagger encodes the egress port in an 802.1Q
++			 * shaped CPU tag, so the tag has to go out through the
++			 * VLAN TCI slot.  The MediaTek private tag produced by
++			 * mtk_foe_entry_set_dsa() cannot be decoded by such a
++			 * switch.
++			 */
++			int err = mtk_foe_entry_set_vlan(eth, entry, dest->dsa_port_tag);
++
++			if (err)
++				return err;
+ 		} else {
+ 			mtk_foe_entry_set_dsa(eth, entry, dest->dsa_port);
+ 		}
+@@ -460,18 +464,23 @@
+ #endif
+ 
+ 	if (dest->dsa_port != 0xffff) {
+-		u16 dsa_port = dest->dsa_port;
+-
+-		if (dsa_port & 0xff00)
+-			dsa_port &= 0xf;
+ 		if (pse_port == PSE_GDM1_PORT || pse_port == PSE_GDM2_PORT || pse_port == PSE_GDM3_PORT) {
+-			if (dsa_port < MTK_DSA_USER_PORT_MAX) {
++			if (dest->dsa_port < MTK_DSA_USER_PORT_MAX) {
+ 				struct mtk_mac *mac = netdev_priv(dest->dev);
+-				mtk_foe_entry_set_queue(eth, entry, mac->dsa_queue_base + mac->dsa_port_rank[dsa_port]);
+-			}
+-		}
+-		if ((dest->dsa_port & 0xff00)) {
+-			mtk_foe_entry_set_vlan(eth, entry, dest->dsa_port >> 4);
++				mtk_foe_entry_set_queue(eth, entry, mac->dsa_queue_base + mac->dsa_port_rank[dest->dsa_port]);
++			}
++		}
++		if (dest->dsa_port_tag) {
++			/* The DSA tagger encodes the egress port in an 802.1Q
++			 * shaped CPU tag, so the tag has to go out through the
++			 * VLAN TCI slot.  The MediaTek private tag produced by
++			 * mtk_foe_entry_set_dsa() cannot be decoded by such a
++			 * switch.
++			 */
++			int err = mtk_foe_entry_set_vlan(eth, entry, dest->dsa_port_tag);
++
++			if (err)
++				return err;
+ 		} else {
+ 			mtk_foe_entry_set_dsa(eth, entry, dest->dsa_port);
+ 		}
